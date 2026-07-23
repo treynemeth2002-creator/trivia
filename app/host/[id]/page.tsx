@@ -4,8 +4,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { revealQuip } from "@/lib/quips";
+import { loadFinalScores, type PlayerScore } from "@/lib/scoring";
 import { useDebounced } from "@/lib/useDebounced";
-import type { Player, Question, Session } from "@/lib/types";
+import type { AnswerRow, Player, Question, Session } from "@/lib/types";
 
 export default function HostControlPage() {
   const { id } = useParams<{ id: string }>();
@@ -13,6 +14,9 @@ export default function HostControlPage() {
   const [questions, setQuestions] = useState<Question[]>([]);
   const [players, setPlayers] = useState<Player[]>([]);
   const [answerCounts, setAnswerCounts] = useState<number[]>([0, 0, 0, 0]);
+  const [currentAnswers, setCurrentAnswers] = useState<AnswerRow[]>([]);
+  const [finalScores, setFinalScores] = useState<PlayerScore[] | null>(null);
+  const [reviving, setReviving] = useState(false);
   const [isHost, setIsHost] = useState<boolean | null>(null);
   const [secondsLeft, setSecondsLeft] = useState(0);
   const [autoAdvance, setAutoAdvance] = useState(false);
@@ -50,13 +54,15 @@ export default function HostControlPage() {
     async (questionId: string) => {
       const { data } = await supabase
         .from("answers")
-        .select("selected_option_index")
+        .select("player_id, question_id, selected_option_index, answered_at")
         .eq("session_id", id)
         .eq("question_id", questionId);
       if (data) {
+        const rows = data as AnswerRow[];
         const counts = [0, 0, 0, 0];
-        for (const a of data) counts[a.selected_option_index]++;
+        for (const a of rows) counts[a.selected_option_index]++;
         setAnswerCounts(counts);
+        setCurrentAnswers(rows);
       }
     },
     [id]
@@ -139,6 +145,17 @@ export default function HostControlPage() {
     }
   }, [currentQuestion?.id, refetchAnswerCounts]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Load the final leaderboard once the game ends.
+  useEffect(() => {
+    if (
+      session?.status === "ended" &&
+      (session.speed_scoring || session.ghost_mode) &&
+      finalScores === null
+    ) {
+      loadFinalScores(session).then(setFinalScores);
+    }
+  }, [session?.status]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Snapshot the alive count when a question starts so the reveal can say
   // how many fell this round.
   useEffect(() => {
@@ -208,6 +225,17 @@ export default function HostControlPage() {
         })
         .eq("id", id);
     }
+  }
+
+  async function reviveEveryone() {
+    setReviving(true);
+    await supabase
+      .from("players")
+      .update({ alive: true })
+      .eq("session_id", id)
+      .eq("alive", false);
+    await refetchPlayers();
+    setReviving(false);
   }
 
   function copy(text: string, label: string) {
@@ -390,7 +418,45 @@ export default function HostControlPage() {
                     session.current_question_index
                   )}
                 </p>
+                {session.speed_scoring &&
+                  (() => {
+                    const aliveIds = new Set(
+                      players.filter((p) => p.alive).map((p) => p.id)
+                    );
+                    const fastest = currentAnswers
+                      .filter(
+                        (a) =>
+                          a.selected_option_index ===
+                            currentQuestion.correct_option_index &&
+                          aliveIds.has(a.player_id)
+                      )
+                      .sort(
+                        (a, b) =>
+                          new Date(a.answered_at).getTime() -
+                          new Date(b.answered_at).getTime()
+                      )[0];
+                    const nick = fastest
+                      ? players.find((p) => p.id === fastest.player_id)?.nickname
+                      : null;
+                    return nick ? (
+                      <p className="mt-1 text-sm text-amber-300">
+                        ⚡ Fastest correct: <span className="font-bold">{nick}</span>
+                      </p>
+                    ) : null;
+                  })()}
               </div>
+
+              {session.revival_enabled && aliveCount < players.length && (
+                <button
+                  onClick={reviveEveryone}
+                  disabled={reviving}
+                  className="w-full rounded-xl border border-fuchsia-500/50 bg-fuchsia-500/10 px-4 py-3 font-bold text-fuchsia-300 hover:bg-fuchsia-500/20 disabled:opacity-50"
+                >
+                  {reviving
+                    ? "Reviving…"
+                    : `💫 REVIVE EVERYONE (${players.length - aliveCount} back in)`}
+                </button>
+              )}
 
               <div className="flex items-center gap-3">
                 <button
@@ -459,6 +525,41 @@ export default function HostControlPage() {
               >
                 {copied === "survivors" ? "Copied!" : "Copy survivor list"}
               </button>
+            )}
+
+            {(session.speed_scoring || session.ghost_mode) && finalScores && (
+              <div className="rounded-xl border border-slate-800 bg-slate-900 p-5">
+                <h3 className="font-semibold">
+                  {session.speed_scoring ? "⚡ Points leaderboard" : "Most correct answers"}
+                </h3>
+                <ol className="mt-3 space-y-1 text-sm">
+                  {finalScores.slice(0, 10).map((s, i) => (
+                    <li
+                      key={s.player.id}
+                      className="flex items-center justify-between rounded-lg bg-slate-800/60 px-3 py-1.5"
+                    >
+                      <span>
+                        <span className="mr-2 text-slate-500">{i + 1}.</span>
+                        {s.player.alive ? "🏆" : "👻"} {s.player.nickname}
+                      </span>
+                      <span className="text-slate-300">
+                        {session.speed_scoring
+                          ? `${s.points} pts`
+                          : `${s.correct} correct`}
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            )}
+
+            {session.channel && (
+              <a
+                href={`/leaderboard/${encodeURIComponent(session.channel)}`}
+                className="block w-full rounded-xl border border-indigo-500/40 bg-indigo-500/10 px-4 py-3 text-center font-semibold text-indigo-300 hover:bg-indigo-500/20"
+              >
+                🏅 View the {session.channel} all-time leaderboard
+              </a>
             )}
           </div>
         )}

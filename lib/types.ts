@@ -11,7 +11,18 @@ export type Session = {
   question_state: "idle" | "asking" | "reveal";
   question_started_at: string | null;
   seconds_per_question: number;
+  ghost_mode: boolean;
+  revival_enabled: boolean;
+  speed_scoring: boolean;
+  channel: string | null;
   created_at: string;
+};
+
+export type AnswerRow = {
+  player_id: string;
+  question_id: string;
+  selected_option_index: number;
+  answered_at: string;
 };
 
 export type Player = {

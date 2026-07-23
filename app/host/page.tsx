@@ -10,6 +10,10 @@ export default function HostCreatePage() {
   const [name, setName] = useState("");
   const [packId, setPackId] = useState(packs[0].pack_id);
   const [expectedPlayers, setExpectedPlayers] = useState(50);
+  const [ghostMode, setGhostMode] = useState(true);
+  const [revivalEnabled, setRevivalEnabled] = useState(true);
+  const [speedScoring, setSpeedScoring] = useState(true);
+  const [channel, setChannel] = useState("");
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -28,6 +32,10 @@ export default function HostCreatePage() {
         host_key: hostKey,
         pack_id: pack.pack_id,
         expected_players: expectedPlayers,
+        ghost_mode: ghostMode,
+        revival_enabled: revivalEnabled,
+        speed_scoring: speedScoring,
+        channel: channel.trim().toLowerCase() || null,
       })
       .select()
       .single();
@@ -113,6 +121,46 @@ export default function HostCreatePage() {
           />
         </label>
 
+        <fieldset className="space-y-3 rounded-lg border border-slate-800 bg-slate-950/50 p-4">
+          <legend className="px-1 text-sm font-semibold text-slate-300">
+            Game options
+          </legend>
+          <Toggle
+            checked={ghostMode}
+            onChange={setGhostMode}
+            label="👻 Ghost mode"
+            hint="Eliminated players keep answering for pride points instead of just watching"
+          />
+          <Toggle
+            checked={revivalEnabled}
+            onChange={setRevivalEnabled}
+            label="💫 Revival button"
+            hint="You get a one-click 'revive everyone' button to reset the tension mid-game"
+          />
+          <Toggle
+            checked={speedScoring}
+            onChange={setSpeedScoring}
+            label="⚡ Speed scoring"
+            hint="Faster correct answers earn more points; reveals call out the fastest player"
+          />
+          <label className="block pt-1">
+            <span className="text-sm text-slate-300">
+              Channel name{" "}
+              <span className="text-slate-500">
+                (optional — builds an all-time leaderboard across your games)
+              </span>
+            </span>
+            <input
+              type="text"
+              value={channel}
+              onChange={(e) => setChannel(e.target.value)}
+              placeholder="yourtwitchname"
+              maxLength={32}
+              className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 outline-none focus:border-indigo-500"
+            />
+          </label>
+        </fieldset>
+
         {error && (
           <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-3 text-sm text-rose-200">
             {error}
@@ -128,5 +176,32 @@ export default function HostCreatePage() {
         </button>
       </form>
     </main>
+  );
+}
+
+function Toggle({
+  checked,
+  onChange,
+  label,
+  hint,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  label: string;
+  hint: string;
+}) {
+  return (
+    <label className="flex cursor-pointer items-start gap-3">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        className="mt-1 h-4 w-4 accent-indigo-500"
+      />
+      <span>
+        <span className="text-sm font-medium text-slate-200">{label}</span>
+        <span className="block text-xs text-slate-500">{hint}</span>
+      </span>
+    </label>
   );
 }

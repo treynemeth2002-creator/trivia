@@ -14,6 +14,17 @@ phones, and the Overlay Link is a transparent browser source for
 OBS/Streamlabs that mirrors the question, countdown, answer bars, and
 survivor count on stream. Remaining: polish pass + end-to-end pilot test.
 
+### Game options (chosen by the host when creating a session)
+- **Ghost mode** — eliminated players keep answering for pride points.
+- **Revival button** — host can bring everyone back mid-game for a hype reset.
+- **Speed scoring** — faster correct answers earn more points (100-500);
+  reveals call out the fastest player and the end screen shows a leaderboard.
+- **Channel name** — optional; groups games into an all-time
+  wins-per-nickname leaderboard at `/leaderboard/<channel>`.
+
+**Existing databases:** paste `supabase/migration-game-settings.sql` into the
+Supabase SQL Editor and Run it once to add these options.
+
 ### Adding the overlay to OBS
 1. In OBS: Sources panel -> + -> **Browser**.
 2. Paste the session's Overlay Link as the URL.

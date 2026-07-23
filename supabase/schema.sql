@@ -19,6 +19,10 @@ create table sessions (
   question_state text not null default 'idle' check (question_state in ('idle', 'asking', 'reveal')),
   question_started_at timestamptz,
   seconds_per_question integer not null default 10,
+  ghost_mode boolean not null default false,        -- eliminated players keep answering for pride
+  revival_enabled boolean not null default false,   -- host gets a revive-everyone button
+  speed_scoring boolean not null default false,     -- faster correct answers score higher
+  channel text,                                     -- streamer name for the cross-game leaderboard
   created_at timestamptz not null default now()
 );
 

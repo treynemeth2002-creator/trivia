@@ -4,9 +4,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
-import { isMuted, setMuted, sounds, unlockAudio } from "@/lib/sounds";
+import { setMuted, sounds, unlockAudio } from "@/lib/sounds";
+import { answerPoints, loadFinalScores, type PlayerScore } from "@/lib/scoring";
 import { useDebounced } from "@/lib/useDebounced";
-import type { Player, Question, Session } from "@/lib/types";
+import type { AnswerRow, Player, Question, Session } from "@/lib/types";
 
 const REACTION_EMOJIS = ["🔥", "😂", "😱", "💀"];
 
@@ -29,6 +30,9 @@ export default function PlayerPage() {
   const [confetti, setConfetti] = useState(false);
   const [soundOn, setSoundOn] = useState(true);
   const [floats, setFloats] = useState<FloatingEmoji[]>([]);
+  const [currentAnswers, setCurrentAnswers] = useState<AnswerRow[]>([]);
+  const [finalScores, setFinalScores] = useState<PlayerScore[] | null>(null);
+  const [revived, setRevived] = useState(false);
   const backupRevealFired = useRef(false);
   const revealSoundFired = useRef(false);
   const lastTickSecond = useRef<number | null>(null);
@@ -78,13 +82,15 @@ export default function PlayerPage() {
     async (questionId: string) => {
       const { data } = await supabase
         .from("answers")
-        .select("selected_option_index")
+        .select("player_id, question_id, selected_option_index, answered_at")
         .eq("session_id", id)
         .eq("question_id", questionId);
       if (data) {
+        const rows = data as AnswerRow[];
         const counts = [0, 0, 0, 0];
-        for (const a of data) counts[a.selected_option_index]++;
+        for (const a of rows) counts[a.selected_option_index]++;
         setAnswerCounts(counts);
+        setCurrentAnswers(rows);
       }
     },
     [id]
@@ -233,6 +239,31 @@ export default function PlayerPage() {
     }
   }, [session?.question_state, player?.alive]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Revival: the host brought everyone back from the dead.
+  useEffect(() => {
+    if (player?.alive && eliminatedOn !== null && session?.status === "live") {
+      setEliminatedOn(null);
+      localStorage.removeItem(elimKey);
+      setRevived(true);
+      sounds.survive();
+      setConfetti(true);
+      setTimeout(() => setConfetti(false), 2600);
+      setTimeout(() => setRevived(false), 4000);
+    }
+  }, [player?.alive]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Load the final leaderboard for my rank once the game ends.
+  useEffect(() => {
+    if (
+      session?.status === "ended" &&
+      (session.speed_scoring || session.ghost_mode) &&
+      finalScores === null &&
+      player
+    ) {
+      loadFinalScores(session).then(setFinalScores);
+    }
+  }, [session?.status, player?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Reveal feedback: confetti + sting if I survived, doom sting if I'm out.
   useEffect(() => {
     if (
@@ -252,6 +283,8 @@ export default function PlayerPage() {
       setTimeout(() => setConfetti(false), 2600);
     } else if (!player.alive && eliminatedOn === session.current_question_index + 1) {
       sounds.eliminated();
+    } else if (!player.alive && selected === question.correct_option_index) {
+      sounds.lockIn(); // little ghost-mode "nice one"
     }
   }, [session?.question_state, player?.alive, selected, question?.id, eliminatedOn]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -309,7 +342,8 @@ export default function PlayerPage() {
   }
 
   async function answer(optionIndex: number) {
-    if (!player || !question || selected !== null || !player.alive) return;
+    if (!player || !question || selected !== null) return;
+    if (!player.alive && !session?.ghost_mode) return;
     if (secondsLeft <= 0) return;
     unlockAudio();
     sounds.lockIn();
@@ -464,6 +498,22 @@ export default function PlayerPage() {
               </p>
             </>
           )}
+          {finalScores &&
+            (() => {
+              const idx = finalScores.findIndex((s) => s.player.id === player.id);
+              if (idx < 0) return null;
+              const mine = finalScores[idx];
+              return (
+                <p className="rounded-xl border border-slate-800 bg-slate-900 p-3 text-sm text-slate-300">
+                  {session.speed_scoring
+                    ? `⚡ ${mine.points} pts — `
+                    : `${mine.correct} correct — `}
+                  ranked <span className="font-bold">#{idx + 1}</span> of{" "}
+                  {finalScores.length}
+                  {!player.alive && session.ghost_mode ? " (ghosts included)" : ""}
+                </p>
+              );
+            })()}
         </div>
       </Shell>
     );
@@ -537,9 +587,17 @@ export default function PlayerPage() {
               <button
                 key={i}
                 onClick={() => answer(i)}
-                disabled={!asking || spectating || selected !== null || secondsLeft <= 0}
+                disabled={
+                  !asking ||
+                  selected !== null ||
+                  secondsLeft <= 0 ||
+                  (spectating && !session.ghost_mode)
+                }
                 className={`relative w-full overflow-hidden rounded-xl border px-4 py-4 text-left text-lg transition ${cls} ${
-                  asking && !spectating && selected === null && secondsLeft > 0
+                  asking &&
+                  selected === null &&
+                  secondsLeft > 0 &&
+                  (!spectating || session.ghost_mode)
                     ? "active:scale-[0.98]"
                     : ""
                 }`}
@@ -565,15 +623,43 @@ export default function PlayerPage() {
           })}
         </div>
 
-        {asking && !spectating && (
+        {revived && (
+          <p className="rounded-xl border border-fuchsia-500/50 bg-fuchsia-500/15 p-3 text-center font-bold text-fuchsia-300 pop">
+            💫 REVIVED! You&apos;re back in the game!
+          </p>
+        )}
+
+        {asking && (
           <p className="text-center text-sm text-slate-400">
-            {selected !== null
+            {spectating
+              ? session.ghost_mode
+                ? selected !== null
+                  ? "👻 Ghost answer locked in!"
+                  : "👻 Ghost mode — keep answering for pride points."
+                : "Watching the survivors battle it out…"
+              : selected !== null
               ? "Locked in! Waiting for the reveal…"
               : secondsLeft > 0
               ? "Tap an answer — it locks in instantly."
               : "Time's up!"}
           </p>
         )}
+
+        {reveal &&
+          session.speed_scoring &&
+          selected === question.correct_option_index &&
+          (() => {
+            const mine = currentAnswers.find((a) => a.player_id === player.id);
+            if (!mine) return null;
+            const first = Math.min(
+              ...currentAnswers.map((a) => new Date(a.answered_at).getTime())
+            );
+            return (
+              <p className="text-center text-lg font-bold text-amber-300 pop">
+                +{answerPoints(session, mine, first)} pts ⚡
+              </p>
+            );
+          })()}
 
         {reveal && !spectating && (
           <p
@@ -585,6 +671,8 @@ export default function PlayerPage() {
           >
             {player.alive
               ? "✅ You're still in!"
+              : session.ghost_mode
+              ? "💀 Eliminated — but your ghost fights on!"
               : "💀 Eliminated — you can keep watching"}
           </p>
         )}

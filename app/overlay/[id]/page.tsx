@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { revealQuip } from "@/lib/quips";
+import { loadFinalScores, type PlayerScore } from "@/lib/scoring";
 import { useDebounced } from "@/lib/useDebounced";
 import type { Player, Question, Session } from "@/lib/types";
 
@@ -22,6 +23,7 @@ export default function OverlayPage() {
   const [answerCounts, setAnswerCounts] = useState<number[]>([0, 0, 0, 0]);
   const [secondsLeft, setSecondsLeft] = useState(0);
   const [floats, setFloats] = useState<FloatingEmoji[]>([]);
+  const [finalScores, setFinalScores] = useState<PlayerScore[] | null>(null);
   const floatKey = useRef(0);
   const aliveAtQuestionStart = useRef<number | null>(null);
 
@@ -156,6 +158,17 @@ export default function OverlayPage() {
   useEffect(() => {
     if (currentQuestion) refetchAnswerCounts(currentQuestion.id);
   }, [currentQuestion?.id, refetchAnswerCounts]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Load the final leaderboard once the game ends.
+  useEffect(() => {
+    if (
+      session?.status === "ended" &&
+      session.speed_scoring &&
+      finalScores === null
+    ) {
+      loadFinalScores(session).then(setFinalScores);
+    }
+  }, [session?.status]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Snapshot the alive count when a question starts so the reveal quip can
   // say how many fell this round.
@@ -339,6 +352,18 @@ export default function OverlayPage() {
                     .map((p) => p.nickname)
                     .join(" · ")}
                   {survivors.length > 12 ? ` · +${survivors.length - 12} more` : ""}
+                </p>
+              )}
+              {session.speed_scoring && finalScores && finalScores.length > 0 && (
+                <p className="mt-2 text-base text-amber-300">
+                  ⚡ Top scorers:{" "}
+                  {finalScores
+                    .slice(0, 3)
+                    .map(
+                      (s) =>
+                        `${s.player.alive ? "🏆" : "👻"} ${s.player.nickname} (${s.points})`
+                    )
+                    .join(" · ")}
                 </p>
               )}
             </div>
