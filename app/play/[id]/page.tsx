@@ -101,14 +101,18 @@ export default function PlayerPage() {
     }
     let cancelled = false;
     (async () => {
+      // Note: we can't filter on the "order" column directly — "order" is a
+      // reserved word in the REST API — so fetch the session's questions and
+      // pick the current one here.
       const { data } = await supabase
         .from("questions")
         .select("*")
-        .eq("session_id", id)
-        .eq("order", session.current_question_index)
-        .single();
-      if (cancelled || !data) return;
-      const q = data as Question;
+        .eq("session_id", id);
+      if (cancelled) return;
+      const q = (data as Question[] | null)?.find(
+        (row) => row.order === session.current_question_index
+      );
+      if (!q) return;
       setQuestion(q);
       setSelected(null);
       const playerId = localStorage.getItem(storageKey);
