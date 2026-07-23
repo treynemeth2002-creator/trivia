@@ -31,9 +31,11 @@ create table questions (
   id uuid primary key default gen_random_uuid(),
   pack_id text not null,
   session_id uuid not null references sessions(id) on delete cascade,
+  type text not null default 'trivia', -- 'trivia' | 'majority' | 'closest'
   text text not null,
-  options jsonb not null,              -- array of exactly 4 answer strings
-  correct_option_index integer not null check (correct_option_index between 0 and 3),
+  options jsonb not null,              -- answer strings ([] for closest rounds)
+  correct_option_index integer check (correct_option_index between 0 and 3), -- trivia only
+  numeric_answer double precision,     -- closest rounds only
   "order" integer not null
 );
 
@@ -52,7 +54,8 @@ create table answers (
   session_id uuid not null references sessions(id) on delete cascade,
   player_id uuid not null references players(id) on delete cascade,
   question_id uuid not null references questions(id) on delete cascade,
-  selected_option_index integer not null check (selected_option_index between 0 and 3),
+  selected_option_index integer check (selected_option_index between 0 and 3),
+  guess_value double precision,        -- closest rounds only
   answered_at timestamptz not null default now(),
   unique (player_id, question_id)     -- a player can only answer each question once
 );
@@ -73,8 +76,10 @@ create policy "anon full access questions" on questions for all using (true) wit
 create policy "anon full access players" on players for all using (true) with check (true);
 create policy "anon full access answers" on answers for all using (true) with check (true);
 
--- Reveals the current question: eliminates alive players who answered wrong
--- (or didn't answer), then flips the session to the reveal state.
+-- Reveals the current question, per round type:
+--   trivia   -> wrong/missing answers are eliminated
+--   majority -> nobody is eliminated (crowd-split fun round)
+--   closest  -> the closest half of alive players survives; no guess ranks last
 create or replace function reveal_current_question(p_session_id uuid)
 returns void
 language plpgsql
@@ -96,15 +101,35 @@ begin
     return;
   end if;
 
-  update players p set alive = false
-    where p.session_id = p_session_id
-    and p.alive
-    and not exists (
-      select 1 from answers a
-      where a.player_id = p.id
-        and a.question_id = v_question.id
-        and a.selected_option_index = v_question.correct_option_index
+  if v_question.type = 'closest' then
+    update players p set alive = false
+    where p.id in (
+      select id from (
+        select pl.id,
+               row_number() over (
+                 order by abs(coalesce(a.guess_value, 1e300) - coalesce(v_question.numeric_answer, 0))
+               ) as rn,
+               count(*) over () as total
+        from players pl
+        left join answers a
+          on a.player_id = pl.id and a.question_id = v_question.id
+        where pl.session_id = p_session_id and pl.alive
+      ) ranked
+      where ranked.rn > greatest(1, (ranked.total + 1) / 2)
     );
+  elsif v_question.type = 'majority' then
+    null; -- vibes only, no eliminations
+  else
+    update players p set alive = false
+      where p.session_id = p_session_id
+      and p.alive
+      and not exists (
+        select 1 from answers a
+        where a.player_id = p.id
+          and a.question_id = v_question.id
+          and a.selected_option_index = v_question.correct_option_index
+      );
+  end if;
 
   update sessions set question_state = 'reveal' where id = p_session_id;
 end;

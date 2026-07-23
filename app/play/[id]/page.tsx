@@ -33,6 +33,8 @@ export default function PlayerPage() {
   const [currentAnswers, setCurrentAnswers] = useState<AnswerRow[]>([]);
   const [finalScores, setFinalScores] = useState<PlayerScore[] | null>(null);
   const [revived, setRevived] = useState(false);
+  const [guessInput, setGuessInput] = useState("");
+  const [lockedGuess, setLockedGuess] = useState<number | null>(null);
   const backupRevealFired = useRef(false);
   const revealSoundFired = useRef(false);
   const lastTickSecond = useRef<number | null>(null);
@@ -82,13 +84,15 @@ export default function PlayerPage() {
     async (questionId: string) => {
       const { data } = await supabase
         .from("answers")
-        .select("player_id, question_id, selected_option_index, answered_at")
+        .select("player_id, question_id, selected_option_index, guess_value, answered_at")
         .eq("session_id", id)
         .eq("question_id", questionId);
       if (data) {
         const rows = data as AnswerRow[];
         const counts = [0, 0, 0, 0];
-        for (const a of rows) counts[a.selected_option_index]++;
+        for (const a of rows) {
+          if (a.selected_option_index !== null) counts[a.selected_option_index]++;
+        }
         setAnswerCounts(counts);
         setCurrentAnswers(rows);
       }
@@ -202,15 +206,20 @@ export default function PlayerPage() {
       revealSoundFired.current = false;
       setQuestion(q);
       setSelected(null);
+      setGuessInput("");
+      setLockedGuess(null);
       const playerId = localStorage.getItem(storageKey);
       if (playerId) {
         const { data: mine } = await supabase
           .from("answers")
-          .select("selected_option_index")
+          .select("selected_option_index, guess_value")
           .eq("question_id", q.id)
           .eq("player_id", playerId)
           .maybeSingle();
-        if (!cancelled && mine) setSelected(mine.selected_option_index);
+        if (!cancelled && mine) {
+          setSelected(mine.selected_option_index);
+          setLockedGuess(mine.guess_value);
+        }
       }
     })();
     return () => {
@@ -274,10 +283,16 @@ export default function PlayerPage() {
     ) {
       return;
     }
-    const participated = selected !== null || !player.alive;
+    const participated =
+      selected !== null || lockedGuess !== null || !player.alive;
     if (!participated) return;
     revealSoundFired.current = true;
-    if (player.alive && selected === question.correct_option_index) {
+    if (question.type === "majority") {
+      sounds.lockIn(); // no stakes, just a little acknowledgement
+    } else if (
+      player.alive &&
+      (question.type === "closest" || selected === question.correct_option_index)
+    ) {
       sounds.survive();
       setConfetti(true);
       setTimeout(() => setConfetti(false), 2600);
@@ -286,7 +301,7 @@ export default function PlayerPage() {
     } else if (!player.alive && selected === question.correct_option_index) {
       sounds.lockIn(); // little ghost-mode "nice one"
     }
-  }, [session?.question_state, player?.alive, selected, question?.id, eliminatedOn]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [session?.question_state, player?.alive, selected, lockedGuess, question?.id, eliminatedOn]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Countdown ticker (display only — the host's browser drives the reveal).
   useEffect(() => {
@@ -356,6 +371,26 @@ export default function PlayerPage() {
     });
     if (error && !error.message.includes("duplicate")) {
       setSelected(null); // let them retry if the insert genuinely failed
+    }
+  }
+
+  async function lockGuess() {
+    if (!player || !question || lockedGuess !== null) return;
+    if (!player.alive && !session?.ghost_mode) return;
+    if (secondsLeft <= 0) return;
+    const value = Number(guessInput.replace(/,/g, "").trim());
+    if (!Number.isFinite(value)) return;
+    unlockAudio();
+    sounds.lockIn();
+    setLockedGuess(value); // lock in immediately
+    const { error } = await supabase.from("answers").insert({
+      session_id: id,
+      player_id: player.id,
+      question_id: question.id,
+      guess_value: value,
+    });
+    if (error && !error.message.includes("duplicate")) {
+      setLockedGuess(null);
     }
   }
 
@@ -572,56 +607,117 @@ export default function PlayerPage() {
           {question.text}
         </h1>
 
-        <div className="space-y-3">
-          {question.options.map((opt, i) => {
-            const isMine = selected === i;
-            const isCorrect = i === question.correct_option_index;
-            const pct = totalAnswers ? Math.round((answerCounts[i] / totalAnswers) * 100) : 0;
-
-            let cls = "border-slate-700 bg-slate-800";
-            if (asking && isMine) cls = "border-indigo-400 bg-indigo-500/20";
-            if (reveal && isCorrect) cls = "border-emerald-500 bg-emerald-500/10";
-            if (reveal && isMine && !isCorrect) cls = "border-rose-500 bg-rose-500/10";
-
-            return (
-              <button
-                key={i}
-                onClick={() => answer(i)}
-                disabled={
-                  !asking ||
-                  selected !== null ||
-                  secondsLeft <= 0 ||
-                  (spectating && !session.ghost_mode)
-                }
-                className={`relative w-full overflow-hidden rounded-xl border px-4 py-4 text-left text-lg transition ${cls} ${
-                  asking &&
-                  selected === null &&
-                  secondsLeft > 0 &&
-                  (!spectating || session.ghost_mode)
-                    ? "active:scale-[0.98]"
-                    : ""
-                }`}
-              >
-                {reveal && (
-                  <div
-                    className={`absolute inset-y-0 left-0 transition-[width] duration-700 ease-out ${
-                      isCorrect ? "bg-emerald-500/25" : "bg-slate-600/30"
-                    }`}
-                    style={{ width: `${pct}%` }}
+        {question.type === "closest" ? (
+          <div className="space-y-3">
+            {asking &&
+              (lockedGuess === null ? (
+                <div className="flex gap-2">
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    value={guessInput}
+                    onChange={(e) => setGuessInput(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && lockGuess()}
+                    placeholder="Type your number"
+                    disabled={
+                      secondsLeft <= 0 || (spectating && !session.ghost_mode)
+                    }
+                    className="w-full rounded-xl border border-slate-700 bg-slate-800 px-4 py-4 text-center text-xl font-bold outline-none focus:border-indigo-500"
                   />
+                  <button
+                    onClick={lockGuess}
+                    disabled={
+                      !guessInput.trim() ||
+                      secondsLeft <= 0 ||
+                      (spectating && !session.ghost_mode)
+                    }
+                    className="shrink-0 rounded-xl bg-indigo-600 px-5 font-bold hover:bg-indigo-500 disabled:opacity-50"
+                  >
+                    Lock in
+                  </button>
+                </div>
+              ) : (
+                <p className="rounded-xl border border-indigo-400 bg-indigo-500/20 px-4 py-4 text-center text-xl font-bold">
+                  🎯 {lockedGuess.toLocaleString()}
+                </p>
+              ))}
+            {reveal && (
+              <div className="rounded-xl border border-emerald-500 bg-emerald-500/10 px-4 py-4 text-center">
+                <p className="text-sm text-slate-400">The answer was</p>
+                <p className="text-3xl font-black text-emerald-300">
+                  {question.numeric_answer?.toLocaleString()}
+                </p>
+                {lockedGuess !== null && (
+                  <p className="mt-1 text-sm text-slate-300">
+                    Your guess: {lockedGuess.toLocaleString()}
+                  </p>
                 )}
-                <span className="relative flex items-center justify-between">
-                  <span>
-                    {reveal && isCorrect ? "✅ " : ""}
-                    {isMine ? "👉 " : ""}
-                    {opt}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {question.options.map((opt, i) => {
+              const isMine = selected === i;
+              const isCorrect =
+                question.type === "trivia" && i === question.correct_option_index;
+              const maxCount = Math.max(...answerCounts);
+              const isCrowdPick =
+                question.type === "majority" &&
+                maxCount > 0 &&
+                answerCounts[i] === maxCount;
+              const pct = totalAnswers ? Math.round((answerCounts[i] / totalAnswers) * 100) : 0;
+
+              let cls = "border-slate-700 bg-slate-800";
+              if (asking && isMine) cls = "border-indigo-400 bg-indigo-500/20";
+              if (reveal && isCorrect) cls = "border-emerald-500 bg-emerald-500/10";
+              if (reveal && isCrowdPick) cls = "border-indigo-400 bg-indigo-500/10";
+              if (reveal && question.type === "trivia" && isMine && !isCorrect)
+                cls = "border-rose-500 bg-rose-500/10";
+
+              return (
+                <button
+                  key={i}
+                  onClick={() => answer(i)}
+                  disabled={
+                    !asking ||
+                    selected !== null ||
+                    secondsLeft <= 0 ||
+                    (spectating && !session.ghost_mode)
+                  }
+                  className={`relative w-full overflow-hidden rounded-xl border px-4 py-4 text-left text-lg transition ${cls} ${
+                    asking &&
+                    selected === null &&
+                    secondsLeft > 0 &&
+                    (!spectating || session.ghost_mode)
+                      ? "active:scale-[0.98]"
+                      : ""
+                  }`}
+                >
+                  {reveal && (
+                    <div
+                      className={`absolute inset-y-0 left-0 transition-[width] duration-700 ease-out ${
+                        isCorrect || isCrowdPick
+                          ? "bg-emerald-500/25"
+                          : "bg-slate-600/30"
+                      }`}
+                      style={{ width: `${pct}%` }}
+                    />
+                  )}
+                  <span className="relative flex items-center justify-between">
+                    <span>
+                      {reveal && isCorrect ? "✅ " : ""}
+                      {reveal && isCrowdPick ? "👑 " : ""}
+                      {isMine ? "👉 " : ""}
+                      {opt}
+                    </span>
+                    {reveal && <span className="text-sm text-slate-300">{pct}%</span>}
                   </span>
-                  {reveal && <span className="text-sm text-slate-300">{pct}%</span>}
-                </span>
-              </button>
-            );
-          })}
-        </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
 
         {revived && (
           <p className="rounded-xl border border-fuchsia-500/50 bg-fuchsia-500/15 p-3 text-center font-bold text-fuchsia-300 pop">
@@ -633,20 +729,25 @@ export default function PlayerPage() {
           <p className="text-center text-sm text-slate-400">
             {spectating
               ? session.ghost_mode
-                ? selected !== null
+                ? selected !== null || lockedGuess !== null
                   ? "👻 Ghost answer locked in!"
                   : "👻 Ghost mode — keep answering for pride points."
                 : "Watching the survivors battle it out…"
-              : selected !== null
+              : selected !== null || lockedGuess !== null
               ? "Locked in! Waiting for the reveal…"
               : secondsLeft > 0
-              ? "Tap an answer — it locks in instantly."
+              ? question.type === "closest"
+                ? "Type your best guess — the closest half survives."
+                : question.type === "majority"
+                ? "No wrong answers — pick a side!"
+                : "Tap an answer — it locks in instantly."
               : "Time's up!"}
           </p>
         )}
 
         {reveal &&
           session.speed_scoring &&
+          question.type === "trivia" &&
           selected === question.correct_option_index &&
           (() => {
             const mine = currentAnswers.find((a) => a.player_id === player.id);
@@ -661,7 +762,21 @@ export default function PlayerPage() {
             );
           })()}
 
-        {reveal && !spectating && (
+        {reveal && question.type === "majority" && selected !== null && (
+          <p
+            className={`rounded-xl border p-3 text-center font-bold ${
+              answerCounts[selected] === Math.max(...answerCounts)
+                ? "border-indigo-400/40 bg-indigo-500/10 text-indigo-300"
+                : "border-amber-500/40 bg-amber-500/10 text-amber-300"
+            }`}
+          >
+            {answerCounts[selected] === Math.max(...answerCounts)
+              ? "🎉 You're with the majority! (+200 pts)"
+              : "😬 Bold minority pick. No eliminations this round!"}
+          </p>
+        )}
+
+        {reveal && question.type !== "majority" && !spectating && (
           <p
             className={`rounded-xl border p-3 text-center font-bold ${
               player.alive
@@ -670,7 +785,9 @@ export default function PlayerPage() {
             } ${justEliminated ? "shake" : ""}`}
           >
             {player.alive
-              ? "✅ You're still in!"
+              ? question.type === "closest"
+                ? "🎯 Close enough — you're still in!"
+                : "✅ You're still in!"
               : session.ghost_mode
               ? "💀 Eliminated — but your ghost fights on!"
               : "💀 Eliminated — you can keep watching"}

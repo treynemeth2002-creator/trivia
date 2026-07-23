@@ -79,8 +79,20 @@ Open http://localhost:3000 and click **Test Supabase connection**. A green
 ## Question packs
 
 Question packs live in `packs/` as plain JSON files you edit by hand —
-see `packs/sample-pack.json` for the format. Each question has the text,
-exactly 4 options, and which option index (0–3) is correct.
+see `packs/sample-pack.json` for the format. Three round types can be mixed
+freely in one pack:
+
+- **Trivia** (default): `text`, 4 `options`, `correct_option_index` (0-3).
+  Wrong or missing answers are eliminated.
+- **Majority**: `"type": "majority"`, `text`, 2-4 `options`. No right
+  answer and nobody is eliminated — the crowd split is the entertainment.
+  Picking with the majority earns 200 pts.
+- **Closest guess**: `"type": "closest"`, `text`, `answer` (a number).
+  Players type a number; the closest half of surviving players stays alive.
+  Closest three earn 500/400/300 pts.
+
+**Existing databases:** paste `supabase/migration-round-types.sql` into the
+Supabase SQL Editor and Run it once to enable the new round types.
 
 ## Project layout
 

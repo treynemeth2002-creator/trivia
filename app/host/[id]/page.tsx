@@ -54,13 +54,15 @@ export default function HostControlPage() {
     async (questionId: string) => {
       const { data } = await supabase
         .from("answers")
-        .select("player_id, question_id, selected_option_index, answered_at")
+        .select("player_id, question_id, selected_option_index, guess_value, answered_at")
         .eq("session_id", id)
         .eq("question_id", questionId);
       if (data) {
         const rows = data as AnswerRow[];
         const counts = [0, 0, 0, 0];
-        for (const a of rows) counts[a.selected_option_index]++;
+        for (const a of rows) {
+          if (a.selected_option_index !== null) counts[a.selected_option_index]++;
+        }
         setAnswerCounts(counts);
         setCurrentAnswers(rows);
       }
@@ -344,16 +346,28 @@ export default function HostControlPage() {
                     {secondsLeft}
                   </span>
                 </div>
-                <ul className="mt-4 grid grid-cols-2 gap-2">
-                  {currentQuestion.options.map((opt, i) => (
-                    <li
-                      key={i}
-                      className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm"
-                    >
-                      {opt}
-                    </li>
-                  ))}
-                </ul>
+                {currentQuestion.type === "closest" ? (
+                  <p className="mt-4 rounded-lg border border-slate-700 bg-slate-800 px-3 py-3 text-sm text-slate-300">
+                    🎯 Number-guessing round — players are typing their guesses.
+                    Closest half survives.
+                  </p>
+                ) : (
+                  <ul className="mt-4 grid grid-cols-2 gap-2">
+                    {currentQuestion.options.map((opt, i) => (
+                      <li
+                        key={i}
+                        className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm"
+                      >
+                        {opt}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {currentQuestion.type === "majority" && (
+                  <p className="mt-2 text-xs text-slate-500">
+                    Majority round — no eliminations, the crowd split is the show.
+                  </p>
+                )}
               </div>
               <p className="text-center text-slate-400">
                 {totalAnswers} of {aliveCount} alive players answered
@@ -368,11 +382,45 @@ export default function HostControlPage() {
             <div className="space-y-4">
               <div className="rounded-xl border border-slate-800 bg-slate-900 p-5">
                 <h2 className="text-xl font-semibold">{currentQuestion.text}</h2>
+                {currentQuestion.type === "closest" && (
+                  <div className="mt-4 space-y-2">
+                    <p className="rounded-lg border border-emerald-500 bg-emerald-500/10 px-3 py-3 text-center">
+                      <span className="text-sm text-slate-400">Answer: </span>
+                      <span className="text-2xl font-black text-emerald-300">
+                        {currentQuestion.numeric_answer?.toLocaleString()}
+                      </span>
+                    </p>
+                    {currentAnswers
+                      .filter((a) => a.guess_value !== null)
+                      .sort(
+                        (a, b) =>
+                          Math.abs((a.guess_value ?? 0) - (currentQuestion.numeric_answer ?? 0)) -
+                          Math.abs((b.guess_value ?? 0) - (currentQuestion.numeric_answer ?? 0))
+                      )
+                      .slice(0, 3)
+                      .map((a, i) => (
+                        <p
+                          key={a.player_id}
+                          className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm"
+                        >
+                          {["🥇", "🥈", "🥉"][i]}{" "}
+                          {players.find((p) => p.id === a.player_id)?.nickname ?? "?"}{" "}
+                          — {a.guess_value?.toLocaleString()}
+                        </p>
+                      ))}
+                  </div>
+                )}
                 <div className="mt-4 space-y-2">
                   {currentQuestion.options.map((opt, i) => {
                     const count = answerCounts[i];
                     const pct = totalAnswers ? Math.round((count / totalAnswers) * 100) : 0;
-                    const correct = i === currentQuestion.correct_option_index;
+                    const maxCount = Math.max(...answerCounts);
+                    const correct =
+                      currentQuestion.type === "trivia"
+                        ? i === currentQuestion.correct_option_index
+                        : currentQuestion.type === "majority" &&
+                          maxCount > 0 &&
+                          count === maxCount;
                     return (
                       <div
                         key={i}
@@ -390,7 +438,11 @@ export default function HostControlPage() {
                         />
                         <div className="relative flex justify-between text-sm">
                           <span>
-                            {correct ? "✅ " : ""}
+                            {correct
+                              ? currentQuestion.type === "majority"
+                                ? "👑 "
+                                : "✅ "
+                              : ""}
                             {opt}
                           </span>
                           <span>
@@ -419,6 +471,7 @@ export default function HostControlPage() {
                   )}
                 </p>
                 {session.speed_scoring &&
+                  currentQuestion.type === "trivia" &&
                   (() => {
                     const aliveIds = new Set(
                       players.filter((p) => p.alive).map((p) => p.id)

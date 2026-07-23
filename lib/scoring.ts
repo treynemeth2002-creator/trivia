@@ -1,12 +1,11 @@
 import { supabase } from "@/lib/supabase";
 import type { AnswerRow, Player, Question, Session } from "@/lib/types";
 
-// Speed scoring: a correct answer is worth 100–500 points depending on how
-// fast it came in relative to the first answer on that question (we don't
-// store per-question start times, so "first tap" is the stopwatch zero).
-// With speed scoring off, every correct answer is a flat 500 so rankings
-// reduce to "most correct".
-
+// Points by round type:
+//   trivia   -> 100–500 per correct answer, scaled by speed relative to the
+//               first answer on that question (flat 500 with speed scoring off)
+//   majority -> 200 for picking the crowd's winning option
+//   closest  -> 500/400/300 for the three closest guesses, 100 for any guess
 export type PlayerScore = {
   player: Player;
   points: number;
@@ -19,21 +18,56 @@ export function computeScores(
   answers: AnswerRow[],
   players: Player[]
 ): PlayerScore[] {
-  const correctIndex = new Map(questions.map((q) => [q.id, q.correct_option_index]));
-  const firstAnswerAt = new Map<string, number>();
+  const byQuestion = new Map<string, AnswerRow[]>();
   for (const a of answers) {
-    const t = new Date(a.answered_at).getTime();
-    const prev = firstAnswerAt.get(a.question_id);
-    if (prev === undefined || t < prev) firstAnswerAt.set(a.question_id, t);
+    const list = byQuestion.get(a.question_id) ?? [];
+    list.push(a);
+    byQuestion.set(a.question_id, list);
   }
 
   const totals = new Map<string, { points: number; correct: number }>();
-  for (const a of answers) {
-    if (correctIndex.get(a.question_id) !== a.selected_option_index) continue;
-    const entry = totals.get(a.player_id) ?? { points: 0, correct: 0 };
-    entry.correct += 1;
-    entry.points += answerPoints(session, a, firstAnswerAt.get(a.question_id));
-    totals.set(a.player_id, entry);
+  const add = (playerId: string, points: number, correct: boolean) => {
+    const entry = totals.get(playerId) ?? { points: 0, correct: 0 };
+    entry.points += points;
+    if (correct) entry.correct += 1;
+    totals.set(playerId, entry);
+  };
+
+  for (const q of questions) {
+    const qAnswers = byQuestion.get(q.id) ?? [];
+    if (q.type === "majority") {
+      const counts = new Map<number, number>();
+      for (const a of qAnswers) {
+        if (a.selected_option_index === null) continue;
+        counts.set(a.selected_option_index, (counts.get(a.selected_option_index) ?? 0) + 1);
+      }
+      const max = Math.max(0, ...counts.values());
+      if (max === 0) continue;
+      for (const a of qAnswers) {
+        if (a.selected_option_index !== null && counts.get(a.selected_option_index) === max) {
+          add(a.player_id, 200, true);
+        }
+      }
+    } else if (q.type === "closest") {
+      const guesses = qAnswers
+        .filter((a) => a.guess_value !== null)
+        .sort(
+          (a, b) =>
+            Math.abs((a.guess_value ?? 0) - (q.numeric_answer ?? 0)) -
+            Math.abs((b.guess_value ?? 0) - (q.numeric_answer ?? 0))
+        );
+      guesses.forEach((a, i) => {
+        add(a.player_id, i === 0 ? 500 : i === 1 ? 400 : i === 2 ? 300 : 100, i < 3);
+      });
+    } else {
+      const firstAt = Math.min(
+        ...qAnswers.map((a) => new Date(a.answered_at).getTime())
+      );
+      for (const a of qAnswers) {
+        if (a.selected_option_index !== q.correct_option_index) continue;
+        add(a.player_id, answerPoints(session, a, firstAt), true);
+      }
+    }
   }
 
   return players
@@ -57,7 +91,7 @@ export function answerPoints(
 ): number {
   if (!session.speed_scoring) return 500;
   const elapsed =
-    firstAnswerAtMs === undefined
+    firstAnswerAtMs === undefined || !Number.isFinite(firstAnswerAtMs)
       ? 0
       : (new Date(answer.answered_at).getTime() - firstAnswerAtMs) / 1000;
   const frac = Math.max(0, 1 - elapsed / session.seconds_per_question);
@@ -71,7 +105,7 @@ export async function loadFinalScores(session: Session): Promise<PlayerScore[]> 
       supabase.from("questions").select("*").eq("session_id", session.id),
       supabase
         .from("answers")
-        .select("player_id, question_id, selected_option_index, answered_at")
+        .select("player_id, question_id, selected_option_index, guess_value, answered_at")
         .eq("session_id", session.id),
       supabase.from("players").select("*").eq("session_id", session.id),
     ]);

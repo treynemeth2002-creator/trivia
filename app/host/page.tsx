@@ -50,9 +50,11 @@ export default function HostCreatePage() {
       pack.questions.map((q, i) => ({
         pack_id: pack.pack_id,
         session_id: session.id,
+        type: q.type ?? "trivia",
         text: q.text,
-        options: q.options,
-        correct_option_index: q.correct_option_index,
+        options: q.options ?? [],
+        correct_option_index: q.correct_option_index ?? null,
+        numeric_answer: q.answer ?? null,
         order: i,
       }))
     );

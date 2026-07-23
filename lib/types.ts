@@ -21,7 +21,8 @@ export type Session = {
 export type AnswerRow = {
   player_id: string;
   question_id: string;
-  selected_option_index: number;
+  selected_option_index: number | null;
+  guess_value: number | null;
   answered_at: string;
 };
 
@@ -33,12 +34,16 @@ export type Player = {
   joined_at: string;
 };
 
+export type QuestionType = "trivia" | "majority" | "closest";
+
 export type Question = {
   id: string;
   session_id: string;
   pack_id: string;
+  type: QuestionType;
   text: string;
   options: string[];
-  correct_option_index: number;
+  correct_option_index: number | null;
+  numeric_answer: number | null;
   order: number;
 };

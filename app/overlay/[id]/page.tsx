@@ -6,7 +6,7 @@ import { supabase } from "@/lib/supabase";
 import { revealQuip } from "@/lib/quips";
 import { loadFinalScores, type PlayerScore } from "@/lib/scoring";
 import { useDebounced } from "@/lib/useDebounced";
-import type { Player, Question, Session } from "@/lib/types";
+import type { AnswerRow, Player, Question, Session } from "@/lib/types";
 
 type FloatingEmoji = { key: number; emoji: string; left: number };
 
@@ -21,6 +21,7 @@ export default function OverlayPage() {
   const [questions, setQuestions] = useState<Question[]>([]);
   const [players, setPlayers] = useState<Player[]>([]);
   const [answerCounts, setAnswerCounts] = useState<number[]>([0, 0, 0, 0]);
+  const [currentAnswers, setCurrentAnswers] = useState<AnswerRow[]>([]);
   const [secondsLeft, setSecondsLeft] = useState(0);
   const [floats, setFloats] = useState<FloatingEmoji[]>([]);
   const [finalScores, setFinalScores] = useState<PlayerScore[] | null>(null);
@@ -51,13 +52,17 @@ export default function OverlayPage() {
     async (questionId: string) => {
       const { data } = await supabase
         .from("answers")
-        .select("selected_option_index")
+        .select("player_id, question_id, selected_option_index, guess_value, answered_at")
         .eq("session_id", id)
         .eq("question_id", questionId);
       if (data) {
+        const rows = data as AnswerRow[];
         const counts = [0, 0, 0, 0];
-        for (const a of data) counts[a.selected_option_index]++;
+        for (const a of rows) {
+          if (a.selected_option_index !== null) counts[a.selected_option_index]++;
+        }
         setAnswerCounts(counts);
+        setCurrentAnswers(rows);
       }
     },
     [id]
@@ -273,12 +278,51 @@ export default function OverlayPage() {
                 )}
               </div>
 
+              {currentQuestion.type === "closest" && (
+                <div className="rounded-xl border border-white/15 bg-white/5 px-4 py-3 text-lg font-semibold">
+                  {asking ? (
+                    <span>🎯 Type your guess — the closest half survives!</span>
+                  ) : (
+                    <span>
+                      🎯 The answer:{" "}
+                      <span className="text-2xl font-black text-emerald-300">
+                        {currentQuestion.numeric_answer?.toLocaleString()}
+                      </span>
+                      {(() => {
+                        const best = currentAnswers
+                          .filter((a) => a.guess_value !== null)
+                          .sort(
+                            (a, b) =>
+                              Math.abs((a.guess_value ?? 0) - (currentQuestion.numeric_answer ?? 0)) -
+                              Math.abs((b.guess_value ?? 0) - (currentQuestion.numeric_answer ?? 0))
+                          )[0];
+                        const nick = best
+                          ? players.find((p) => p.id === best.player_id)?.nickname
+                          : null;
+                        return nick ? (
+                          <span className="ml-3 text-base text-amber-300">
+                            closest: <span className="font-bold">{nick}</span> (
+                            {best!.guess_value?.toLocaleString()})
+                          </span>
+                        ) : null;
+                      })()}
+                    </span>
+                  )}
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-2">
                 {currentQuestion.options.map((opt, i) => {
                   const pct = totalAnswers
                     ? Math.round((answerCounts[i] / totalAnswers) * 100)
                     : 0;
-                  const correct = reveal && i === currentQuestion.correct_option_index;
+                  const maxCount = Math.max(...answerCounts);
+                  const correct =
+                    reveal &&
+                    (currentQuestion.type === "trivia"
+                      ? i === currentQuestion.correct_option_index
+                      : currentQuestion.type === "majority" &&
+                        maxCount > 0 &&
+                        answerCounts[i] === maxCount);
                   return (
                     <div
                       key={i}
@@ -298,7 +342,11 @@ export default function OverlayPage() {
                       )}
                       <span className="relative flex items-center justify-between gap-2">
                         <span>
-                          {correct ? "✅ " : ""}
+                          {correct
+                            ? currentQuestion.type === "majority"
+                              ? "👑 "
+                              : "✅ "
+                            : ""}
                           {opt}
                         </span>
                         {reveal && (

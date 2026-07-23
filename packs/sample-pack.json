@@ -8,9 +8,19 @@
       "correct_option_index": 1
     },
     {
+      "type": "majority",
+      "text": "Would you rather fight 1 horse-sized duck or 100 duck-sized horses?",
+      "options": ["1 horse-sized duck", "100 duck-sized horses"]
+    },
+    {
       "text": "Which of these is NOT a real speedrunning category?",
       "options": ["Any%", "100%", "Glitchless", "Casual%"],
       "correct_option_index": 3
+    },
+    {
+      "type": "closest",
+      "text": "How many billion hours of Twitch were watched in 2023? (just the number)",
+      "answer": 21
     },
     {
       "text": "What does 'OBS' stand for?",
@@ -23,9 +33,9 @@
       "correct_option_index": 1
     },
     {
-      "text": "HQ Trivia's live host era peaked around which year?",
-      "options": ["2014", "2016", "2018", "2020"],
-      "correct_option_index": 2
+      "type": "majority",
+      "text": "Pineapple on pizza?",
+      "options": ["Obviously yes", "Absolutely not"]
     },
     {
       "text": "Which currency do Twitch viewers use to cheer?",
