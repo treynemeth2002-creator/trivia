@@ -239,8 +239,8 @@ export default function HostControlPage() {
                 onCopy={() => copy(overlayLink, "overlay")}
               />
               <p className="text-xs text-slate-500">
-                The player and overlay pages arrive in the next build phases —
-                the links are fixed now so you can share them early.
+                The overlay page arrives in the next build phase — its link is
+                fixed now so you can set up OBS early.
               </p>
             </div>
 
