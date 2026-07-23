@@ -1,0 +1,36 @@
+{
+  "pack_id": "sample-pack",
+  "name": "Sample Pack (edit me)",
+  "questions": [
+    {
+      "text": "What year was Twitch launched?",
+      "options": ["2009", "2011", "2013", "2015"],
+      "correct_option_index": 1
+    },
+    {
+      "text": "Which of these is NOT a real speedrunning category?",
+      "options": ["Any%", "100%", "Glitchless", "Casual%"],
+      "correct_option_index": 3
+    },
+    {
+      "text": "What does 'OBS' stand for?",
+      "options": [
+        "Online Broadcast System",
+        "Open Broadcaster Software",
+        "Optimized Bitrate Streaming",
+        "Overlay Broadcast Studio"
+      ],
+      "correct_option_index": 1
+    },
+    {
+      "text": "HQ Trivia's live host era peaked around which year?",
+      "options": ["2014", "2016", "2018", "2020"],
+      "correct_option_index": 2
+    },
+    {
+      "text": "Which currency do Twitch viewers use to cheer?",
+      "options": ["Bits", "Gems", "Coins", "Embers"],
+      "correct_option_index": 0
+    }
+  ]
+}
