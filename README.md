@@ -4,12 +4,17 @@ Live trivia tool for streamers: a host runs a session, viewers play along on
 their phones, and an OBS overlay mirrors the game on stream. Built per the
 spec in `CLAUDE.md`.
 
-**Current status: Phase 3 (player flow built).** Hosts run the game from
-`/host`; viewers open the Player Link on their phones, pick a nickname, and
-play along — tap to lock in an answer during the countdown, see the reveal
-with live percentage bars, get eliminated on a wrong/missed answer, and keep
-spectating until the final survived/eliminated screen. The OBS overlay page
-is the next phase.
+**Current status: Phase 4 (overlay built).** All three views are in:
+hosts run the game from `/host`, viewers play from the Player Link on their
+phones, and the Overlay Link is a transparent browser source for
+OBS/Streamlabs that mirrors the question, countdown, answer bars, and
+survivor count on stream. Remaining: polish pass + end-to-end pilot test.
+
+### Adding the overlay to OBS
+1. In OBS: Sources panel -> + -> **Browser**.
+2. Paste the session's Overlay Link as the URL.
+3. Set Width/Height to your canvas size (e.g. 1920 x 1080).
+4. The background is transparent; the game panel sits in the lower third.
 
 **If you set up the database during Phase 1:** paste
 `supabase/migration-phase2.sql` into the Supabase SQL Editor and Run it once —
