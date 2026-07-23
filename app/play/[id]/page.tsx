@@ -2,8 +2,15 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
+import type { RealtimeChannel } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
+import { isMuted, setMuted, sounds, unlockAudio } from "@/lib/sounds";
+import { useDebounced } from "@/lib/useDebounced";
 import type { Player, Question, Session } from "@/lib/types";
+
+const REACTION_EMOJIS = ["🔥", "😂", "😱", "💀"];
+
+type FloatingEmoji = { key: number; emoji: string; left: number };
 
 export default function PlayerPage() {
   const { id } = useParams<{ id: string }>();
@@ -12,13 +19,22 @@ export default function PlayerPage() {
   const [playerLoaded, setPlayerLoaded] = useState(false);
   const [question, setQuestion] = useState<Question | null>(null);
   const [answerCounts, setAnswerCounts] = useState<number[]>([0, 0, 0, 0]);
+  const [aliveCount, setAliveCount] = useState<number | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
   const [nickname, setNickname] = useState("");
   const [joining, setJoining] = useState(false);
   const [secondsLeft, setSecondsLeft] = useState(0);
   const [eliminatedOn, setEliminatedOn] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [confetti, setConfetti] = useState(false);
+  const [soundOn, setSoundOn] = useState(true);
+  const [floats, setFloats] = useState<FloatingEmoji[]>([]);
   const backupRevealFired = useRef(false);
+  const revealSoundFired = useRef(false);
+  const lastTickSecond = useRef<number | null>(null);
+  const lastReactionAt = useRef(0);
+  const floatKey = useRef(0);
+  const reactChannel = useRef<RealtimeChannel | null>(null);
 
   const storageKey = `trivia_player_${id}`;
   const elimKey = `trivia_eliminated_on_${id}`;
@@ -49,6 +65,15 @@ export default function PlayerPage() {
     setPlayerLoaded(true);
   }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const refetchAliveCount = useCallback(async () => {
+    const { count } = await supabase
+      .from("players")
+      .select("*", { count: "exact", head: true })
+      .eq("session_id", id)
+      .eq("alive", true);
+    if (count !== null) setAliveCount(count);
+  }, [id]);
+
   const refetchAnswerCounts = useCallback(
     async (questionId: string) => {
       const { data } = await supabase
@@ -65,10 +90,17 @@ export default function PlayerPage() {
     [id]
   );
 
+  // When hundreds of players change at once (mass elimination), refetch once.
+  const debouncedPlayerSync = useDebounced(() => {
+    refetchPlayer();
+    refetchAliveCount();
+  }, 400);
+
   // Initial load + realtime subscription.
   useEffect(() => {
     refetchSession();
     refetchPlayer();
+    refetchAliveCount();
     setEliminatedOn(
       localStorage.getItem(elimKey) !== null
         ? Number(localStorage.getItem(elimKey))
@@ -85,14 +117,41 @@ export default function PlayerPage() {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "players", filter: `session_id=eq.${id}` },
-        () => refetchPlayer()
+        () => debouncedPlayerSync()
       )
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [id, refetchSession, refetchPlayer]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [id, refetchSession, refetchPlayer, refetchAliveCount, debouncedPlayerSync]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Live emoji reactions: broadcast-only (nothing stored in the database).
+  useEffect(() => {
+    const ch = supabase
+      .channel(`reactions-${id}`, { config: { broadcast: { self: true } } })
+      .on("broadcast", { event: "react" }, (msg) => {
+        const emoji = (msg.payload as { emoji?: string })?.emoji;
+        if (!emoji || !REACTION_EMOJIS.includes(emoji)) return;
+        floatKey.current += 1;
+        const item: FloatingEmoji = {
+          key: floatKey.current,
+          emoji,
+          left: 8 + Math.random() * 84,
+        };
+        setFloats((prev) => [...prev.slice(-24), item]);
+        setTimeout(
+          () => setFloats((prev) => prev.filter((f) => f.key !== item.key)),
+          2300
+        );
+      })
+      .subscribe();
+    reactChannel.current = ch;
+    return () => {
+      reactChannel.current = null;
+      supabase.removeChannel(ch);
+    };
+  }, [id]);
 
   // Connection-drop safety net: phones lock, tabs sleep, wifi blips, and the
   // realtime stream silently dies. Refetch on wake-up and every 15s.
@@ -101,6 +160,7 @@ export default function PlayerPage() {
       if (document.visibilityState === "hidden") return;
       refetchSession();
       refetchPlayer();
+      refetchAliveCount();
     };
     window.addEventListener("focus", onWake);
     document.addEventListener("visibilitychange", onWake);
@@ -110,7 +170,7 @@ export default function PlayerPage() {
       document.removeEventListener("visibilitychange", onWake);
       clearInterval(poll);
     };
-  }, [refetchSession, refetchPlayer]);
+  }, [refetchSession, refetchPlayer, refetchAliveCount]);
 
   // Load the active question (and my existing answer) whenever it changes.
   useEffect(() => {
@@ -133,6 +193,7 @@ export default function PlayerPage() {
       );
       if (!q) return;
       backupRevealFired.current = false;
+      revealSoundFired.current = false;
       setQuestion(q);
       setSelected(null);
       const playerId = localStorage.getItem(storageKey);
@@ -155,8 +216,9 @@ export default function PlayerPage() {
   useEffect(() => {
     if (session?.question_state === "reveal" && question) {
       refetchAnswerCounts(question.id);
+      refetchAliveCount();
     }
-  }, [session?.question_state, question?.id, refetchAnswerCounts]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [session?.question_state, question?.id, refetchAnswerCounts, refetchAliveCount]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (
@@ -171,6 +233,28 @@ export default function PlayerPage() {
     }
   }, [session?.question_state, player?.alive]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Reveal feedback: confetti + sting if I survived, doom sting if I'm out.
+  useEffect(() => {
+    if (
+      session?.question_state !== "reveal" ||
+      !question ||
+      !player ||
+      revealSoundFired.current
+    ) {
+      return;
+    }
+    const participated = selected !== null || !player.alive;
+    if (!participated) return;
+    revealSoundFired.current = true;
+    if (player.alive && selected === question.correct_option_index) {
+      sounds.survive();
+      setConfetti(true);
+      setTimeout(() => setConfetti(false), 2600);
+    } else if (!player.alive && eliminatedOn === session.current_question_index + 1) {
+      sounds.eliminated();
+    }
+  }, [session?.question_state, player?.alive, selected, question?.id, eliminatedOn]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Countdown ticker (display only — the host's browser drives the reveal).
   useEffect(() => {
     if (!session || session.question_state !== "asking" || !session.question_started_at) {
@@ -180,7 +264,16 @@ export default function PlayerPage() {
       new Date(session.question_started_at).getTime() +
       session.seconds_per_question * 1000;
     const tick = () => {
-      setSecondsLeft(Math.max(0, Math.ceil((endsAt - Date.now()) / 1000)));
+      const remaining = Math.max(0, Math.ceil((endsAt - Date.now()) / 1000));
+      setSecondsLeft(remaining);
+      if (
+        remaining > 0 &&
+        remaining <= 3 &&
+        lastTickSecond.current !== remaining
+      ) {
+        lastTickSecond.current = remaining;
+        sounds.tick();
+      }
       // Backup reveal: normally the host's browser fires the reveal, but if
       // it's asleep or offline the game would hang. Any player can nudge it
       // 2.5s past the deadline — the database function ignores duplicates.
@@ -196,6 +289,7 @@ export default function PlayerPage() {
 
   async function join(e: React.FormEvent) {
     e.preventDefault();
+    unlockAudio();
     const nick = nickname.trim();
     if (!nick) return;
     setJoining(true);
@@ -217,6 +311,8 @@ export default function PlayerPage() {
   async function answer(optionIndex: number) {
     if (!player || !question || selected !== null || !player.alive) return;
     if (secondsLeft <= 0) return;
+    unlockAudio();
+    sounds.lockIn();
     setSelected(optionIndex); // lock in immediately
     const { error } = await supabase.from("answers").insert({
       session_id: id,
@@ -227,6 +323,25 @@ export default function PlayerPage() {
     if (error && !error.message.includes("duplicate")) {
       setSelected(null); // let them retry if the insert genuinely failed
     }
+  }
+
+  function react(emoji: string) {
+    unlockAudio();
+    const now = Date.now();
+    if (now - lastReactionAt.current < 600) return; // gentle rate limit
+    lastReactionAt.current = now;
+    reactChannel.current?.send({
+      type: "broadcast",
+      event: "react",
+      payload: { emoji },
+    });
+  }
+
+  function toggleSound() {
+    unlockAudio();
+    const next = !soundOn;
+    setSoundOn(next);
+    setMuted(!next);
   }
 
   /* ---------------- render ---------------- */
@@ -297,7 +412,7 @@ export default function PlayerPage() {
   // Waiting room.
   if (session.status === "waiting") {
     return (
-      <Shell>
+      <Shell floats={floats} onReact={react}>
         <div className="text-center space-y-3">
           <h1 className="text-2xl font-bold">{session.name}</h1>
           <p className="text-4xl">🎉</p>
@@ -307,6 +422,11 @@ export default function PlayerPage() {
           <p className="text-slate-400">
             Hang tight — the host will start the game soon.
           </p>
+          {aliveCount !== null && aliveCount > 1 && (
+            <p className="text-sm text-slate-500">
+              {aliveCount} players in the lobby
+            </p>
+          )}
         </div>
       </Shell>
     );
@@ -315,7 +435,8 @@ export default function PlayerPage() {
   // Game over.
   if (session.status === "ended") {
     return (
-      <Shell>
+      <Shell floats={floats} onReact={react}>
+        {player.alive && <Confetti />}
         <div className="text-center space-y-3">
           <h1 className="text-2xl font-bold">{session.name}</h1>
           {player.alive ? (
@@ -325,6 +446,9 @@ export default function PlayerPage() {
                 You survived, {player.nickname}!
               </p>
               <p className="text-slate-400">
+                {aliveCount !== null && aliveCount > 0
+                  ? `One of only ${aliveCount} left standing. `
+                  : ""}
                 You&apos;re part of the winners&apos; split — the host will sort
                 out the prize.
               </p>
@@ -361,23 +485,42 @@ export default function PlayerPage() {
     session.seconds_per_question > 0
       ? secondsLeft / session.seconds_per_question
       : 0;
+  const justEliminated =
+    reveal && !player.alive && eliminatedOn === session.current_question_index + 1;
 
   return (
-    <Shell wide>
+    <Shell wide floats={floats} onReact={react}>
+      {confetti && <Confetti />}
       <div className="w-full space-y-4">
         <div className="flex items-center justify-between text-sm text-slate-400">
-          <span>
+          <span className="flex items-center gap-2">
             Question {session.current_question_index + 1}
+            {aliveCount !== null && (
+              <span className="rounded bg-slate-800 px-2 py-0.5 text-xs text-emerald-300">
+                ❤️ {aliveCount} left
+              </span>
+            )}
             {spectating && (
-              <span className="ml-2 rounded bg-slate-800 px-2 py-0.5 text-xs text-amber-300">
+              <span className="rounded bg-slate-800 px-2 py-0.5 text-xs text-amber-300">
                 👻 Spectating
               </span>
             )}
           </span>
-          {asking && <CountdownRing seconds={secondsLeft} frac={frac} />}
+          <span className="flex items-center gap-2">
+            <button
+              onClick={toggleSound}
+              className="rounded bg-slate-800 px-2 py-1 text-base"
+              aria-label={soundOn ? "Mute sounds" : "Unmute sounds"}
+            >
+              {soundOn ? "🔊" : "🔇"}
+            </button>
+            {asking && <CountdownRing seconds={secondsLeft} frac={frac} />}
+          </span>
         </div>
 
-        <h1 className="text-xl font-bold leading-snug">{question.text}</h1>
+        <h1 className="text-xl font-bold leading-snug pop" key={question.id}>
+          {question.text}
+        </h1>
 
         <div className="space-y-3">
           {question.options.map((opt, i) => {
@@ -403,7 +546,7 @@ export default function PlayerPage() {
               >
                 {reveal && (
                   <div
-                    className={`absolute inset-y-0 left-0 ${
+                    className={`absolute inset-y-0 left-0 transition-[width] duration-700 ease-out ${
                       isCorrect ? "bg-emerald-500/25" : "bg-slate-600/30"
                     }`}
                     style={{ width: `${pct}%` }}
@@ -438,7 +581,7 @@ export default function PlayerPage() {
               player.alive
                 ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
                 : "border-rose-500/40 bg-rose-500/10 text-rose-300"
-            }`}
+            } ${justEliminated ? "shake" : ""}`}
           >
             {player.alive
               ? "✅ You're still in!"
@@ -453,8 +596,13 @@ export default function PlayerPage() {
 function CountdownRing({ seconds, frac }: { seconds: number; frac: number }) {
   const r = 20;
   const circ = 2 * Math.PI * r;
+  const danger = frac <= 0.3;
   return (
-    <span className="relative inline-flex h-12 w-12 items-center justify-center">
+    <span
+      className={`relative inline-flex h-12 w-12 items-center justify-center ${
+        danger ? "pulse-danger" : ""
+      }`}
+    >
       <svg viewBox="0 0 48 48" className="absolute inset-0 -rotate-90">
         <circle cx="24" cy="24" r={r} fill="none" stroke="#334155" strokeWidth="4" />
         <circle
@@ -462,7 +610,7 @@ function CountdownRing({ seconds, frac }: { seconds: number; frac: number }) {
           cy="24"
           r={r}
           fill="none"
-          stroke={frac > 0.3 ? "#6366f1" : "#f43f5e"}
+          stroke={danger ? "#f43f5e" : "#6366f1"}
           strokeWidth="4"
           strokeDasharray={circ}
           strokeDashoffset={circ * (1 - frac)}
@@ -474,10 +622,67 @@ function CountdownRing({ seconds, frac }: { seconds: number; frac: number }) {
   );
 }
 
-function Shell({ children, wide }: { children: React.ReactNode; wide?: boolean }) {
+function Confetti() {
+  return (
+    <div className="pointer-events-none fixed inset-0 z-50 overflow-hidden">
+      {Array.from({ length: 36 }, (_, i) => {
+        const colors = ["#f43f5e", "#f59e0b", "#10b981", "#6366f1", "#ec4899", "#eab308"];
+        return (
+          <span
+            key={i}
+            className="confetti-piece"
+            style={{
+              left: `${Math.random() * 100}%`,
+              background: colors[i % colors.length],
+              animationDelay: `${Math.random() * 0.4}s`,
+              animationDuration: `${1.4 + Math.random() * 1.2}s`,
+            }}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+function Shell({
+  children,
+  wide,
+  floats,
+  onReact,
+}: {
+  children: React.ReactNode;
+  wide?: boolean;
+  floats?: FloatingEmoji[];
+  onReact?: (emoji: string) => void;
+}) {
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center justify-center p-5">
       <div className={`w-full ${wide ? "max-w-lg" : "max-w-sm"}`}>{children}</div>
+
+      {floats && floats.length > 0 && (
+        <div className="pointer-events-none fixed inset-x-0 bottom-16 top-0 z-40 overflow-hidden">
+          {floats.map((f) => (
+            <span key={f.key} className="float-emoji" style={{ left: `${f.left}%` }}>
+              {f.emoji}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {onReact && (
+        <div className="fixed inset-x-0 bottom-0 z-30 flex justify-center gap-3 pb-4">
+          {REACTION_EMOJIS.map((e) => (
+            <button
+              key={e}
+              onClick={() => onReact(e)}
+              className="rounded-full border border-slate-700 bg-slate-900/90 px-3 py-2 text-xl active:scale-125 transition"
+              aria-label={`React ${e}`}
+            >
+              {e}
+            </button>
+          ))}
+        </div>
+      )}
     </main>
   );
 }

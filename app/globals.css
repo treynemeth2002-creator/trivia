@@ -30,3 +30,59 @@ button {
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
 }
+
+/* ---- game juice ---- */
+
+.confetti-piece {
+  position: absolute;
+  top: -3vh;
+  width: 8px;
+  height: 14px;
+  border-radius: 2px;
+  animation-name: confetti-fall;
+  animation-timing-function: ease-in;
+  animation-fill-mode: forwards;
+}
+@keyframes confetti-fall {
+  0% { transform: translateY(0) rotate(0deg); }
+  100% { transform: translateY(105vh) rotate(720deg); }
+}
+
+.float-emoji {
+  position: absolute;
+  bottom: 0;
+  font-size: 1.75rem;
+  animation: float-up 2.2s ease-out forwards;
+  pointer-events: none;
+}
+@keyframes float-up {
+  0% { transform: translateY(0) scale(1); opacity: 1; }
+  100% { transform: translateY(-40vh) scale(1.6); opacity: 0; }
+}
+
+.shake {
+  animation: shake 0.5s;
+}
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-8px); }
+  40% { transform: translateX(8px); }
+  60% { transform: translateX(-6px); }
+  80% { transform: translateX(6px); }
+}
+
+.pop {
+  animation: pop 0.3s ease-out;
+}
+@keyframes pop {
+  0% { transform: scale(0.96); opacity: 0.6; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+.pulse-danger {
+  animation: pulse-danger 1s infinite;
+}
+@keyframes pulse-danger {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.12); }
+}

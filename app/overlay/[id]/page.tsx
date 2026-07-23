@@ -1,9 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import { revealQuip } from "@/lib/quips";
+import { useDebounced } from "@/lib/useDebounced";
 import type { Player, Question, Session } from "@/lib/types";
+
+type FloatingEmoji = { key: number; emoji: string; left: number };
 
 /**
  * OBS browser-source overlay: a transparent, read-only mirror of the game.
@@ -17,6 +21,9 @@ export default function OverlayPage() {
   const [players, setPlayers] = useState<Player[]>([]);
   const [answerCounts, setAnswerCounts] = useState<number[]>([0, 0, 0, 0]);
   const [secondsLeft, setSecondsLeft] = useState(0);
+  const [floats, setFloats] = useState<FloatingEmoji[]>([]);
+  const floatKey = useRef(0);
+  const aliveAtQuestionStart = useRef<number | null>(null);
 
   const currentQuestion =
     session && session.status === "live"
@@ -54,6 +61,16 @@ export default function OverlayPage() {
     [id]
   );
 
+  // Bursts of player/answer events (everyone answering at once) collapse
+  // into a single refetch.
+  const debouncedPlayers = useDebounced(() => refetchPlayers(), 400);
+  const lastAnswerQuestionId = useRef<string | null>(null);
+  const debouncedAnswers = useDebounced(() => {
+    if (lastAnswerQuestionId.current) {
+      refetchAnswerCounts(lastAnswerQuestionId.current);
+    }
+  }, 400);
+
   useEffect(() => {
     refetchSession();
     refetchPlayers();
@@ -69,14 +86,15 @@ export default function OverlayPage() {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "players", filter: `session_id=eq.${id}` },
-        () => refetchPlayers()
+        () => debouncedPlayers()
       )
       .on(
         "postgres_changes",
         { event: "INSERT", schema: "public", table: "answers", filter: `session_id=eq.${id}` },
         (payload) => {
           const row = payload.new as { question_id: string };
-          refetchAnswerCounts(row.question_id);
+          lastAnswerQuestionId.current = row.question_id;
+          debouncedAnswers();
         }
       )
       .subscribe();
@@ -84,7 +102,32 @@ export default function OverlayPage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [id, refetchSession, refetchPlayers, refetchQuestions, refetchAnswerCounts]);
+  }, [id, refetchSession, refetchPlayers, refetchQuestions, debouncedPlayers, debouncedAnswers]);
+
+  // Live emoji reactions from players float up over the stream.
+  useEffect(() => {
+    const ch = supabase
+      .channel(`reactions-${id}`)
+      .on("broadcast", { event: "react" }, (msg) => {
+        const emoji = (msg.payload as { emoji?: string })?.emoji;
+        if (!emoji || emoji.length > 4) return;
+        floatKey.current += 1;
+        const item: FloatingEmoji = {
+          key: floatKey.current,
+          emoji,
+          left: 10 + Math.random() * 80,
+        };
+        setFloats((prev) => [...prev.slice(-24), item]);
+        setTimeout(
+          () => setFloats((prev) => prev.filter((f) => f.key !== item.key)),
+          2300
+        );
+      })
+      .subscribe();
+    return () => {
+      supabase.removeChannel(ch);
+    };
+  }, [id]);
 
   // Connection-drop safety net: OBS keeps the page alive for hours, so poll
   // and refetch on wake in case the realtime stream silently died.
@@ -114,6 +157,14 @@ export default function OverlayPage() {
     if (currentQuestion) refetchAnswerCounts(currentQuestion.id);
   }, [currentQuestion?.id, refetchAnswerCounts]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Snapshot the alive count when a question starts so the reveal quip can
+  // say how many fell this round.
+  useEffect(() => {
+    if (session?.question_state === "asking") {
+      aliveAtQuestionStart.current = players.filter((p) => p.alive).length;
+    }
+  }, [session?.question_state, session?.current_question_index]); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     if (!session || session.question_state !== "asking" || !session.question_started_at) {
       return;
@@ -140,9 +191,27 @@ export default function OverlayPage() {
   const reveal = session.question_state === "reveal";
   const survivors = players.filter((p) => p.alive);
 
+  const eliminatedThisRound = Math.max(
+    0,
+    (aliveAtQuestionStart.current ?? aliveCount) - aliveCount
+  );
+
   return (
     <>
       {transparent}
+      {floats.length > 0 && (
+        <div className="pointer-events-none fixed inset-x-0 bottom-24 top-0 z-40 overflow-hidden">
+          {floats.map((f) => (
+            <span
+              key={f.key}
+              className="float-emoji"
+              style={{ left: `${f.left}%`, fontSize: "2.5rem" }}
+            >
+              {f.emoji}
+            </span>
+          ))}
+        </div>
+      )}
       <div className="fixed inset-x-0 bottom-0 flex justify-center p-6 text-slate-100">
         <div className="w-full max-w-3xl rounded-2xl border border-white/10 bg-slate-950/85 p-5 shadow-2xl backdrop-blur">
           {/* -------- waiting -------- */}
@@ -171,7 +240,10 @@ export default function OverlayPage() {
                   <p className="text-sm font-bold uppercase tracking-wide text-indigo-400">
                     Question {session.current_question_index + 1}
                   </p>
-                  <p className="mt-1 text-2xl font-black leading-snug">
+                  <p
+                    className="mt-1 text-2xl font-black leading-snug pop"
+                    key={currentQuestion.id}
+                  >
                     {currentQuestion.text}
                   </p>
                 </div>
@@ -205,7 +277,7 @@ export default function OverlayPage() {
                     >
                       {reveal && (
                         <div
-                          className={`absolute inset-y-0 left-0 ${
+                          className={`absolute inset-y-0 left-0 transition-[width] duration-700 ease-out ${
                             correct ? "bg-emerald-500/30" : "bg-slate-500/25"
                           }`}
                           style={{ width: `${pct}%` }}
@@ -234,7 +306,14 @@ export default function OverlayPage() {
                 ) : (
                   <p>
                     <span className="font-bold text-emerald-400">{aliveCount}</span>{" "}
-                    still standing
+                    still standing —{" "}
+                    <span className="italic text-slate-400">
+                      {revealQuip(
+                        eliminatedThisRound,
+                        aliveCount,
+                        session.current_question_index
+                      )}
+                    </span>
                   </p>
                 )}
                 <p className="text-sm uppercase tracking-wide text-slate-500">

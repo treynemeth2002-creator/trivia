@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import { revealQuip } from "@/lib/quips";
+import { useDebounced } from "@/lib/useDebounced";
 import type { Player, Question, Session } from "@/lib/types";
 
 export default function HostControlPage() {
@@ -17,6 +19,8 @@ export default function HostControlPage() {
   const [copied, setCopied] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const revealFired = useRef(false);
+  const aliveAtQuestionStart = useRef<number | null>(null);
+  const lastAnswerQuestionId = useRef<string | null>(null);
 
   const currentQuestion =
     session && session.status !== "waiting"
@@ -58,6 +62,15 @@ export default function HostControlPage() {
     [id]
   );
 
+  // Bursts of player/answer events (everyone answering at once) collapse
+  // into a single refetch.
+  const debouncedPlayers = useDebounced(() => refetchPlayers(), 400);
+  const debouncedAnswers = useDebounced(() => {
+    if (lastAnswerQuestionId.current) {
+      refetchAnswerCounts(lastAnswerQuestionId.current);
+    }
+  }, 400);
+
   // Initial load + realtime subscription.
   useEffect(() => {
     refetchSession();
@@ -82,14 +95,15 @@ export default function HostControlPage() {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "players", filter: `session_id=eq.${id}` },
-        () => refetchPlayers()
+        () => debouncedPlayers()
       )
       .on(
         "postgres_changes",
         { event: "INSERT", schema: "public", table: "answers", filter: `session_id=eq.${id}` },
         (payload) => {
           const row = payload.new as { question_id: string };
-          refetchAnswerCounts(row.question_id);
+          lastAnswerQuestionId.current = row.question_id;
+          debouncedAnswers();
         }
       )
       .subscribe();
@@ -124,6 +138,14 @@ export default function HostControlPage() {
       refetchAnswerCounts(currentQuestion.id);
     }
   }, [currentQuestion?.id, refetchAnswerCounts]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Snapshot the alive count when a question starts so the reveal can say
+  // how many fell this round.
+  useEffect(() => {
+    if (session?.question_state === "asking") {
+      aliveAtQuestionStart.current = players.filter((p) => p.alive).length;
+    }
+  }, [session?.question_state, session?.current_question_index]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Countdown driver: ticks the timer and fires the reveal when it hits zero.
   useEffect(() => {
@@ -333,7 +355,7 @@ export default function HostControlPage() {
                         }`}
                       >
                         <div
-                          className={`absolute inset-y-0 left-0 ${
+                          className={`absolute inset-y-0 left-0 transition-[width] duration-700 ease-out ${
                             correct ? "bg-emerald-500/25" : "bg-slate-600/30"
                           }`}
                           style={{ width: `${pct}%` }}
@@ -358,6 +380,16 @@ export default function HostControlPage() {
                 <span className="text-slate-400">
                   of {players.length} players still in
                 </span>
+                <p className="mt-1 text-sm italic text-slate-500">
+                  {revealQuip(
+                    Math.max(
+                      0,
+                      (aliveAtQuestionStart.current ?? aliveCount) - aliveCount
+                    ),
+                    aliveCount,
+                    session.current_question_index
+                  )}
+                </p>
               </div>
 
               <div className="flex items-center gap-3">
