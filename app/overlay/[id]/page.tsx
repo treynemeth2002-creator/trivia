@@ -86,6 +86,24 @@ export default function OverlayPage() {
     };
   }, [id, refetchSession, refetchPlayers, refetchQuestions, refetchAnswerCounts]);
 
+  // Connection-drop safety net: OBS keeps the page alive for hours, so poll
+  // and refetch on wake in case the realtime stream silently died.
+  useEffect(() => {
+    const onWake = () => {
+      if (document.visibilityState === "hidden") return;
+      refetchSession();
+      refetchPlayers();
+    };
+    window.addEventListener("focus", onWake);
+    document.addEventListener("visibilitychange", onWake);
+    const poll = setInterval(onWake, 15000);
+    return () => {
+      window.removeEventListener("focus", onWake);
+      document.removeEventListener("visibilitychange", onWake);
+      clearInterval(poll);
+    };
+  }, [refetchSession, refetchPlayers]);
+
   // Keep the question list fresh (it's inserted right before a session
   // goes live, so refetch when the session flips state).
   useEffect(() => {

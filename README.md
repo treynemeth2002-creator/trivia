@@ -4,7 +4,11 @@ Live trivia tool for streamers: a host runs a session, viewers play along on
 their phones, and an OBS overlay mirrors the game on stream. Built per the
 spec in `CLAUDE.md`.
 
-**Current status: Phase 4 (overlay built).** All three views are in:
+**Current status: Phase 5 (polish pass done).** See `TESTING.md` for the
+pilot-night checklist. Remaining: the real end-to-end test with people on
+different devices and networks.
+
+ All three views are in:
 hosts run the game from `/host`, viewers play from the Player Link on their
 phones, and the Overlay Link is a transparent browser source for
 OBS/Streamlabs that mirrors the question, countdown, answer bars, and

@@ -24,3 +24,9 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Snappier taps on phones: no double-tap zoom or grey tap flash. */
+button {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}

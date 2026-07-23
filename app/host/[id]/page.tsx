@@ -99,6 +99,24 @@ export default function HostControlPage() {
     };
   }, [id, refetchSession, refetchPlayers, refetchAnswerCounts]);
 
+  // Connection-drop safety net: refetch on tab wake-up and every 15s in case
+  // the realtime stream silently died.
+  useEffect(() => {
+    const onWake = () => {
+      if (document.visibilityState === "hidden") return;
+      refetchSession();
+      refetchPlayers();
+    };
+    window.addEventListener("focus", onWake);
+    document.addEventListener("visibilitychange", onWake);
+    const poll = setInterval(onWake, 15000);
+    return () => {
+      window.removeEventListener("focus", onWake);
+      document.removeEventListener("visibilitychange", onWake);
+      clearInterval(poll);
+    };
+  }, [refetchSession, refetchPlayers]);
+
   // Refresh answer counts whenever the active question changes.
   useEffect(() => {
     if (currentQuestion) {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import type { Player, Question, Session } from "@/lib/types";
@@ -18,6 +18,7 @@ export default function PlayerPage() {
   const [secondsLeft, setSecondsLeft] = useState(0);
   const [eliminatedOn, setEliminatedOn] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const backupRevealFired = useRef(false);
 
   const storageKey = `trivia_player_${id}`;
   const elimKey = `trivia_eliminated_on_${id}`;
@@ -93,6 +94,24 @@ export default function PlayerPage() {
     };
   }, [id, refetchSession, refetchPlayer]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Connection-drop safety net: phones lock, tabs sleep, wifi blips, and the
+  // realtime stream silently dies. Refetch on wake-up and every 15s.
+  useEffect(() => {
+    const onWake = () => {
+      if (document.visibilityState === "hidden") return;
+      refetchSession();
+      refetchPlayer();
+    };
+    window.addEventListener("focus", onWake);
+    document.addEventListener("visibilitychange", onWake);
+    const poll = setInterval(onWake, 15000);
+    return () => {
+      window.removeEventListener("focus", onWake);
+      document.removeEventListener("visibilitychange", onWake);
+      clearInterval(poll);
+    };
+  }, [refetchSession, refetchPlayer]);
+
   // Load the active question (and my existing answer) whenever it changes.
   useEffect(() => {
     if (!session || session.status !== "live") {
@@ -113,6 +132,7 @@ export default function PlayerPage() {
         (row) => row.order === session.current_question_index
       );
       if (!q) return;
+      backupRevealFired.current = false;
       setQuestion(q);
       setSelected(null);
       const playerId = localStorage.getItem(storageKey);
@@ -159,12 +179,20 @@ export default function PlayerPage() {
     const endsAt =
       new Date(session.question_started_at).getTime() +
       session.seconds_per_question * 1000;
-    const tick = () =>
+    const tick = () => {
       setSecondsLeft(Math.max(0, Math.ceil((endsAt - Date.now()) / 1000)));
+      // Backup reveal: normally the host's browser fires the reveal, but if
+      // it's asleep or offline the game would hang. Any player can nudge it
+      // 2.5s past the deadline — the database function ignores duplicates.
+      if (Date.now() > endsAt + 2500 && !backupRevealFired.current) {
+        backupRevealFired.current = true;
+        supabase.rpc("reveal_current_question", { p_session_id: id });
+      }
+    };
     tick();
     const interval = setInterval(tick, 250);
     return () => clearInterval(interval);
-  }, [session?.question_state, session?.question_started_at]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [session?.question_state, session?.question_started_at, id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function join(e: React.FormEvent) {
     e.preventDefault();
