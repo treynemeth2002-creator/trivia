@@ -4,8 +4,15 @@ Live trivia tool for streamers: a host runs a session, viewers play along on
 their phones, and an OBS overlay mirrors the game on stream. Built per the
 spec in `CLAUDE.md`.
 
-**Current status: Phase 1 (project setup + database).** Nothing game-related
-is built yet — that starts after you confirm this phase works.
+**Current status: Phase 2 (host flow built).** The host can create a session
+at `/host`, share the player/overlay links, watch players join, and run the
+game (start, countdown, reveal, eliminations, next, final survivor list).
+The player and overlay pages are the next phases.
+
+**If you set up the database during Phase 1:** paste
+`supabase/migration-phase2.sql` into the Supabase SQL Editor and Run it once —
+it adds the game-state columns the host flow needs. (Fresh installs that run
+`schema.sql` get everything automatically.)
 
 ## One-time setup (you do these once, ~10 minutes)
 

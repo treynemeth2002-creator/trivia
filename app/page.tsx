@@ -31,6 +31,12 @@ export default function Home() {
         <p className="mt-2 text-slate-400">
           Phase 1 setup check — confirm the database is connected.
         </p>
+        <a
+          href="/host"
+          className="mt-4 inline-block rounded-lg bg-emerald-600 px-6 py-3 font-semibold hover:bg-emerald-500"
+        >
+          Host a session →
+        </a>
       </div>
 
       {!supabaseConfigured && (
